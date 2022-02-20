@@ -10,7 +10,7 @@ import subprocess
 import mimetypes
 
 import logging
-import argparse
+import yaml
 
 logging.basicConfig(level=logging.INFO)
 mimetypes.add_type('text/gemini', '.gmi')
@@ -40,10 +40,10 @@ def recv_req(conn: SSL.Connection, timeout=.1):
             return None
 
 
-def serve_req(conn: SSL.Connection, addr, url: str, servedir: PathLike, cgidir: PathLike):
+def serve_req(conn: SSL.Connection, addr, url: str, conf: dict):
     url = urlparse(url)
-    servedir = path.abspath(servedir)
-    cgidir = path.join(servedir, cgidir)
+    servedir = path.abspath(conf['servedir'])
+    cgidir = None if 'cgidir' not in conf else path.join(conf['servedir'], conf['cgidir'])
     reqdir = path.abspath(path.join(servedir, '.'+url.path))
     if path.commonpath([servedir, reqdir]) != servedir:
         return serve_notfound(conn)
@@ -51,7 +51,7 @@ def serve_req(conn: SSL.Connection, addr, url: str, servedir: PathLike, cgidir: 
         reqdir = path.join(reqdir, 'index.gmi')
     if not path.isfile(reqdir):
         return serve_notfound(conn)
-    if path.commonpath([cgidir, reqdir]) == cgidir:
+    if cgidir is not None and path.commonpath([cgidir, reqdir]) == cgidir:
         return serve_cgi(conn, addr, reqdir, url)
     return serve_file(conn, reqdir)
 
@@ -123,23 +123,18 @@ def accept_client_cert(conn, cert, err_num, err_depth, ret_code):
 
 
 def main():
-    parser = argparse.ArgumentParser('Corned Beef Sandwich Gemini Server')
-    parser.add_argument('--addr', '-a', default='127.0.0.1', help='IP address to bind to (default:"127.0.0.1")')
-    parser.add_argument('--port', '-p', type=int, default=1965, help='TCP port to listen on (default: 1965)')
-    parser.add_argument('--servedir', '-s', default='./serve', help='Directory to serve (devault: "./serve")')
-    parser.add_argument('--cgidir', '-g', default='cgi-bin', help='CGI script directory, relative to --servedir (default: "cgi-bin")')
-    parser.add_argument('--certfile', '-c', default='./crypt/server.crt', help='Cert file')
-    parser.add_argument('--keyfile', '-k', default='./crypt/server.key', help='Private key file')
-    args = parser.parse_args()
+    conf = yaml.safe_load(open('./cbs.conf'))
+    if 'addr' not in conf: conf['addr'] = '0.0.0.0'
+    if 'port' not in conf: conf['port'] = 1965
 
     ctxt = SSL.Context(SSL.TLS_SERVER_METHOD)
     ctxt.set_verify(SSL.VERIFY_PEER, accept_client_cert)
-    ctxt.use_certificate_file(args.certfile, SSL.FILETYPE_PEM)
-    ctxt.use_privatekey_file(args.keyfile, SSL.FILETYPE_PEM)
+    ctxt.use_certificate_file(conf['cert'])
+    ctxt.use_privatekey_file(conf['pkey'])
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((args.addr, args.port))
+        sock.bind((conf['addr'], conf['port']))
         sock.listen()
         ssock = SSL.Connection(ctxt, sock)
         ssock.set_accept_state()
@@ -149,11 +144,10 @@ def main():
             logging.info('Connection from {}'.format(addr))
             req = recv_req(conn)
             if req is not None:
-                serve_req(conn, addr, req, args.servedir, args.cgidir)
+                serve_req(conn, addr, req, conf)
             conn.shutdown()
             conn.sock_shutdown(socket.SHUT_RDWR)
 
 
 if __name__ == '__main__':
     main()
-
