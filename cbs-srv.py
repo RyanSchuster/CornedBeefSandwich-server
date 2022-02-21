@@ -3,6 +3,7 @@
 import select
 import socket
 from OpenSSL import SSL
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from urllib.parse import urlparse, unquote
 
 import re
@@ -123,20 +124,27 @@ def serve_req(conn: SSL.Connection, addr, url: str, conf: dict):
 def serve_cgi(conn: SSL.Connection, addr, req_path, extra_path, url, conf: dict):
     cert = conn.get_peer_certificate()
     extra_trans, _ = translate_path(extra_path, conf['servedir'], check_existence=False, allow_extra=False)
-    env = environ.copy()
+
+    # TODO: properly escape characters in DNs, see RFC 2253
+    issuer_dn = b','.join([n+b'='+v for n, v in cert.get_issuer().get_components()]).decode('utf-8')
+    subject_dn = b','.join([n+b'='+v for n, v in cert.get_subject().get_components()]).decode('utf-8')
+    pubkey = cert.get_pubkey().to_cryptography_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo).decode('utf-8')
+    # TODO: validate cert valid dates
+    # TODO: does the handshake still check the CertificateVerify message if the set_verify callback returns true?
 
     # RFC 3875
+    env = environ.copy()
     env['AUTH_TYPE'] = 'CERTIFICATE' if cert is not None else ''
-    env['CONTENT_LENGTH'] = ''     # Requests don't contain content, leave blank
-    env['CONTENT_TYPE'] = ''       # Requests don't contain content, leave blank
+    env['CONTENT_LENGTH'] = ''  # Requests don't contain content, leave blank
+    env['CONTENT_TYPE'] = ''  # Requests don't contain content, leave blank
     env['GATEWAY_INTERFACE'] = 'CGI/1.1'
-    env['PATH_INFO'] = unquote(extra_path)  # RFC 3875 specifies no URL encoding
+    env['PATH_INFO'] = unquote(extra_path)  # RFC 3875 specifies no URL encoding or parameters
     env['PATH_TRANSLATED'] = extra_trans
     env['QUERY_STRING'] = url.query
-    env['REMOTE_ADDR'] = str(addr)
-    env['REMOTE_HOST'] = ''        # TODO: pull domain name from cert?
-    env['REMOTE_IDENT'] = ''       # There is no ident info in gemini, leave blank
-    env['REMOTE_USER'] = ''        # TODO: populate with TLS session ID?  Maybe name from cert?
+    env['REMOTE_ADDR'] = addr[0]
+    env['REMOTE_HOST'] = ''  # TODO: pull domain name from cert?
+    env['REMOTE_IDENT'] = ''  # There is no ident info in gemini, leave blank
+    env['REMOTE_USER'] = ''  # TODO: populate with TLS session ID?  Maybe name from cert?
     env['REQUEST_METHOD'] = 'GET'  # This is the closest reasonable value
     env['SCRIPT_NAME'] = req_path
     env['SERVER_NAME'] = url.hostname
@@ -146,13 +154,15 @@ def serve_cgi(conn: SSL.Connection, addr, req_path, extra_path, url, conf: dict)
 
     env['TLS_CIPHER'] = conn.get_cipher_name()
     env['TLS_VERSION'] = conn.get_cipher_version()
-    env['TLS_CLIENT_HASH'] = 'SHA256:'+''  # SHA-256 hash of raw cert bytes
-    env['TLS_CLIENT_ISSUER'] = ''
-    env['TLS_CLIENT_ISSUER_DN'] = ''
-    env['TLS_CLIENT_SUBJECT'] = ''
-    env['TLS_CLIENT_SUBJECT_DN'] = ''
-    env['TLS_CLIENT_PUBKEY'] = ''
-    env['TLS_CLIENT_SERIAL_NUMBER'] = ''
+    env['TLS_CLIENT_HASH'] = cert.digest('sha256')  # TODO: compare format to other servers
+    env['TLS_CLIENT_ISSUER'] = issuer_dn
+    env['TLS_CLIENT_ISSUER_DN'] = issuer_dn
+    env['TLS_CLIENT_ISSUER_CN'] = cert.get_issuer().CN
+    env['TLS_CLIENT_SUBJECT'] = subject_dn
+    env['TLS_CLIENT_SUBJECT_DN'] = subject_dn
+    env['TLS_CLIENT_SUBJECT_CN'] = cert.get_subject().CN
+    env['TLS_CLIENT_PUBKEY'] = pubkey  # TODO: does this or something similar already exist in other servers?
+    env['TLS_CLIENT_SERIAL_NUMBER'] = str(cert.get_serial_number())  # TODO: compare format to other servers
 
     env['GEMINI_URL'] = ''
 
