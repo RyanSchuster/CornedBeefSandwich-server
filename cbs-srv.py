@@ -174,7 +174,7 @@ def serve_cgi(conn: SSL.Connection, addr, req_path, extra_path, url, conf: dict)
         raise CBSException(42, 'CGI script error', '{} -> {}'.format(req_path, x.returncode))
     except PermissionError:
         raise CBSException(42, 'CGI not executable', req_path)
-    conn.send(proc.stdout)
+    conn.sendall(proc.stdout)
 
 
 def serve_file(conn: SSL.Connection, filedir):
@@ -185,8 +185,8 @@ def serve_file(conn: SSL.Connection, filedir):
         f.close()
     except Exception as x:
         raise CBSException(40, 'Server error accessing content', x)
-    conn.send('20 {}\r\n'.format(mime_type or 'application/octet-stream').encode('utf-8'))
-    conn.send(content)
+    conn.sendall('20 {}\r\n'.format(mime_type or 'application/octet-stream').encode('utf-8'))
+    conn.sendall(content)
 
 
 # ------------------------------------------------------------------------------
@@ -225,10 +225,10 @@ def main():
                 serve_req(conn, addr, req, conf)
             except CBSException as x:
                 logging.error('{} {} {}'.format(x.code, x.meta, x.logdata))
-                conn.send('{} {}\r\n'.format(x.code, x.meta).encode('utf-8'))
+                conn.sendall('{} {}\r\n'.format(x.code, x.meta).encode('utf-8'))
             except Exception as x:
                 logging.error('Exception: {}'.format(x))
-                conn.send('40 Server error\r\n')
+                conn.sendall('40 Server error\r\n')
             conn.shutdown()
             conn.sock_shutdown(socket.SHUT_RDWR)
 
